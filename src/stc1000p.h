@@ -96,7 +96,6 @@
     _(SA, 	LED_S, 	LED_A, 	LED_OFF, 	SP_ALARM_MIN,	SP_ALARM_MAX,		0,		0)		\
     _(SP, 	LED_S, 	LED_P, 	LED_OFF, 	TEMP_MIN,		TEMP_MAX,			200,	680)	\
     _(St, 	LED_S, 	LED_t, 	LED_OFF, 	0,				8,					0,		0)		\
-    _(dh, 	LED_d, 	LED_h, 	LED_OFF, 	0,				999,				0,		0)		\
     _(cd, 	LED_c, 	LED_d, 	LED_OFF, 	0,				60,					5,		5)		\
     _(hd, 	LED_h, 	LED_d, 	LED_OFF, 	0,				60,					2,		2)		\
     _(rP, 	LED_r, 	LED_P, 	LED_OFF, 	0,				1,					0,		0)		\
@@ -197,6 +196,9 @@ typedef union
 extern led_e_t led_e;
 extern led_t led_10, led_1, led_01;
 extern unsigned const char led_lookup[];
+
+extern int setpoint;
+extern unsigned int duration;
 
 extern unsigned int eeprom_read_config(unsigned char eeprom_address);
 extern void eeprom_write_config(unsigned char eeprom_address,unsigned int data);

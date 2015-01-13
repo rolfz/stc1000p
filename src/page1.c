@@ -266,7 +266,7 @@ void button_menu_fsm(){
 		}
 		break;
 	case state_show_profile_dh:
-		int_to_led(eeprom_read_config(EEADR_SET_MENU_ITEM(dh)));
+		int_to_led(duration);
 		if(countdown==0){
 			countdown=13;
 			state = state_show_profile;
@@ -337,9 +337,9 @@ void button_menu_fsm(){
 				if(config_item >= SET_MENU_SIZE){
 					config_item = 0;
 				}
-				/* Jump to exit code shared with BTN_DOWN case */
-				/* GOTO's are frowned upon, but avoiding code duplication saves precious code space */
-				goto chk_skip_menu_item;
+				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE && config_item == St){
+					config_item++;
+				}
 			}
 			state = state_show_config_item;
 		} else if(BTN_RELEASED(BTN_DOWN)){
@@ -352,13 +352,8 @@ void button_menu_fsm(){
 				if(config_item > SET_MENU_SIZE-1){
 					config_item = SET_MENU_SIZE-1;
 				}
-chk_skip_menu_item:
-				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE){
-					if(config_item == St){
-						config_item += 2;
-					}else if(config_item == dh){
-						config_item -= 2;
-					}
+				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE && config_item == St){
+					config_item--;
 				}
 			}
 			state = state_show_config_item;
@@ -420,11 +415,11 @@ chk_cfg_acc_label:
 					if(config_item == rn){
 						// When setting runmode, clear current step & duration
 						eeprom_write_config(EEADR_SET_MENU_ITEM(St), 0);
-						eeprom_write_config(EEADR_SET_MENU_ITEM(dh), 0);
 						if(config_value < THERMOSTAT_MODE){
 							unsigned char eeadr_sp = EEADR_PROFILE_SETPOINT(((unsigned char)config_value), 0);
 							// Set intial value for SP
-							eeprom_write_config(EEADR_SET_MENU_ITEM(SP), eeprom_read_config(eeadr_sp));
+							setpoint = eeprom_read_config(eeadr_sp);
+							eeprom_write_config(EEADR_SET_MENU_ITEM(SP), setpoint);
 							// Hack in case inital step duration is '0'
 							if(eeprom_read_config(eeadr_sp+1) == 0){
 								config_value = THERMOSTAT_MODE;

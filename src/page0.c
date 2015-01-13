@@ -49,6 +49,7 @@ led_t led_10, led_1, led_01;
 
 static int temperature=0;
 static int temperature2=0;
+int setpoint;
 
 /* Functions.
  * Note: Functions used from other page cannot be static, but functions
@@ -205,13 +206,13 @@ void value_to_led(int value, unsigned char decimal) {
 /* To be called once every hour on the hour.
  * Updates EEPROM configuration when running profile.
  */
+unsigned int duration = 0;
 static void update_profile(){
 	unsigned char profile_no = eeprom_read_config(EEADR_SET_MENU_ITEM(rn));
 
 	// Running profile?
 	if (profile_no < THERMOSTAT_MODE) {
 		unsigned char curr_step = eeprom_read_config(EEADR_SET_MENU_ITEM(St));
-		unsigned int curr_dur = eeprom_read_config(EEADR_SET_MENU_ITEM(dh)) + 1;
 		unsigned char profile_step_eeaddr;
 		unsigned int profile_step_dur;
 		int profile_next_step_sp;
@@ -221,13 +222,16 @@ static void update_profile(){
 			curr_step = 8;
 		}
 
+		duration++;
+
 		profile_step_eeaddr = EEADR_PROFILE_SETPOINT(profile_no, curr_step);
 		profile_step_dur = eeprom_read_config(profile_step_eeaddr + 1);
 		profile_next_step_sp = eeprom_read_config(profile_step_eeaddr + 2);
 
 		// Reached end of step?
-		if (curr_dur >= profile_step_dur) {
+		if (duration >= profile_step_dur) {
 			// Update setpoint with value from next step
+			setpoint = profile_next_step_sp;
 			eeprom_write_config(EEADR_SET_MENU_ITEM(SP), profile_next_step_sp);
 			// Is this the last step (next step is number 9 or next step duration is 0)?
 			if (curr_step == 8 || eeprom_read_config(profile_step_eeaddr + 3) == 0) {
@@ -236,13 +240,13 @@ static void update_profile(){
 				return; // Fastest way out...
 			}
 			// Reset duration
-			curr_dur = 0;
+			duration = 0;
 			// Update step
 			curr_step++;
 			eeprom_write_config(EEADR_SET_MENU_ITEM(St), curr_step);
 		} else if(eeprom_read_config(EEADR_SET_MENU_ITEM(rP))) { // Is ramping enabled?
 			int profile_step_sp = eeprom_read_config(profile_step_eeaddr);
-			unsigned int t = curr_dur << 6;
+			unsigned int t = duration << 6;
 			long sp = 32;
 			unsigned char i;
 
@@ -255,13 +259,11 @@ static void update_profile(){
 			    sp += profile_step_sp;
 			  }
 			}
-			sp >>= 6;
 
-			// Update setpoint
-			eeprom_write_config(EEADR_SET_MENU_ITEM(SP), sp);
+			setpoint = (sp >>= 6);
 		}
-		// Update duration
-		eeprom_write_config(EEADR_SET_MENU_ITEM(dh), curr_dur);
+	} else {
+		duration = 0;
 	}
 }
 
@@ -272,7 +274,6 @@ static void update_profile(){
 unsigned int cooling_delay = 60;  // Initial cooling delay
 unsigned int heating_delay = 60;  // Initial heating delay
 static void temperature_control(){
-	int setpoint = eeprom_read_config(EEADR_SET_MENU_ITEM(SP));
 	int hysteresis2 = eeprom_read_config(EEADR_SET_MENU_ITEM(hy2));
 	unsigned char probe2 = eeprom_read_config(EEADR_SET_MENU_ITEM(Pb));
 
@@ -358,16 +359,19 @@ static void init() {
 	// Enable Timer2 interrupt
 	TMR2IE = 1;
 
-	// Postscaler 1:15, - , prescaler 1:16
-	T4CON = 0b01110010;
+	// Postscaler 1:16, - , prescaler 1:16
+	T4CON = 0b01111010;
 	TMR4ON = eeprom_read_config(EEADR_POWER_ON);
-	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:16-> 62.5kHz, 250 and postscale 1:15 -> 16.66666 Hz or 60ms
-	PR4 = 250;
+	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:16-> 62.5kHz, 244 and postscale 1:16 -> 16.01 Hz or close to 62.5ms
+	PR4 = 244;
 
 	// Postscaler 1:7, Enable counter, prescaler 1:64
 	T6CON = 0b00110111;
 	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:64-> 15.625kHz, 250 and postscale 1:6 -> 8.93Hz or 112ms
 	PR6 = 250;
+
+	// Get initial setpoint
+	setpoint = eeprom_read_config(EEADR_SET_MENU_ITEM(SP));
 
 	// Set PEIE (enable peripheral interrupts, that is for timer2) and GIE (enable global interrupts)
 	INTCON = 0b11000000;
@@ -450,7 +454,7 @@ static int ad_to_temp(unsigned int adfilter){
  * Main entry point.
  */
 void main(void) __naked {
-	unsigned int millisx60=0;
+	unsigned int cnt16Hz=0;
 	unsigned int ad_filter=0x7fff, ad_filter2=0x7fff;
 
 	init();
@@ -477,9 +481,9 @@ void main(void) __naked {
 
 		if(TMR4IF) {
 
-			millisx60++;
+			cnt16Hz++;
 
-			if(millisx60 & 0x1){
+			if(cnt16Hz & 0x1){
 				ad_filter = read_ad(ad_filter);
 				START_TCONV_2();
 			} else {
@@ -487,9 +491,8 @@ void main(void) __naked {
 				START_TCONV_1();
 			}
 
-			// Only run every 16th time called, that is 16x60ms = 960ms
-			// Close enough to 1s for our purposes.
-			if((millisx60 & 0xf) == 0) {
+			// Only run every 16th time called, that is 16Hz/16 = 1Hz = every second
+			if((cnt16Hz & 0xf) == 0) {
 
 				temperature = ad_to_temp(ad_filter) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
 				temperature2 = ad_to_temp(ad_filter2) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc2));
@@ -510,14 +513,14 @@ void main(void) __naked {
 					if(((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn))) < THERMOSTAT_MODE){
 						// Indicate profile mode
 						led_e.e_set = 0;
-						// Update profile every hour
-						if(millisx60 >= 60000){
+						// Update profile every minute
+						if(cnt16Hz >= (60*16)){
 							update_profile();
-							millisx60 = 0;
+							cnt16Hz = 0;
 						}
 					} else {
 						led_e.e_set = 1;
-						millisx60 = 0;
+						cnt16Hz = 0;
 					}
 
 					{

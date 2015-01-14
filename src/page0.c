@@ -212,7 +212,7 @@ static void update_profile(){
 
 	// Running profile?
 	if (profile_no < THERMOSTAT_MODE) {
-		unsigned char curr_step = eeprom_read_config(EEADR_SET_MENU_ITEM(St));
+		unsigned char curr_step = eeprom_read_config(EEADR_St);
 		unsigned char profile_step_eeaddr;
 		unsigned int profile_step_dur;
 		int profile_next_step_sp;
@@ -243,7 +243,7 @@ static void update_profile(){
 			duration = 0;
 			// Update step
 			curr_step++;
-			eeprom_write_config(EEADR_SET_MENU_ITEM(St), curr_step);
+			eeprom_write_config(EEADR_St, curr_step);
 		} else if(eeprom_read_config(EEADR_SET_MENU_ITEM(rP))) { // Is ramping enabled?
 			int profile_step_sp = eeprom_read_config(profile_step_eeaddr);
 			unsigned int t = duration << 6;
@@ -262,8 +262,6 @@ static void update_profile(){
 
 			setpoint = (sp >>= 6);
 		}
-	} else {
-		duration = 0;
 	}
 }
 

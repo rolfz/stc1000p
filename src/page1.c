@@ -256,7 +256,7 @@ void button_menu_fsm(){
 		}
 		break;
 	case state_show_profile_st:
-		int_to_led(eeprom_read_config(EEADR_SET_MENU_ITEM(St)));
+		int_to_led(eeprom_read_config(EEADR_St));
 		if(countdown==0){
 			countdown=13;
 			state = state_show_profile_dh;
@@ -337,9 +337,6 @@ void button_menu_fsm(){
 				if(config_item >= SET_MENU_SIZE){
 					config_item = 0;
 				}
-				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE && config_item == St){
-					config_item++;
-				}
 			}
 			state = state_show_config_item;
 		} else if(BTN_RELEASED(BTN_DOWN)){
@@ -351,9 +348,6 @@ void button_menu_fsm(){
 			} else {
 				if(config_item > SET_MENU_SIZE-1){
 					config_item = SET_MENU_SIZE-1;
-				}
-				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE && config_item == St){
-					config_item--;
 				}
 			}
 			state = state_show_config_item;
@@ -414,7 +408,8 @@ chk_cfg_acc_label:
 				if(menu_item == SET_MENU_ITEM_NO){
 					if(config_item == rn){
 						// When setting runmode, clear current step & duration
-						eeprom_write_config(EEADR_SET_MENU_ITEM(St), 0);
+						eeprom_write_config(EEADR_St, 0);
+						duration = 0;
 						if(config_value < THERMOSTAT_MODE){
 							unsigned char eeadr_sp = EEADR_PROFILE_SETPOINT(((unsigned char)config_value), 0);
 							// Set intial value for SP

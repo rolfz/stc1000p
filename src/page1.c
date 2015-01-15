@@ -236,7 +236,7 @@ void button_menu_fsm(){
 		break;
 
 	case state_show_sp:
-		temperature_to_led(eeprom_read_config(EEADR_SET_MENU_ITEM(SP)));
+		temperature_to_led(setpoint);
 		if(!BTN_HELD(BTN_UP)){
 			state=state_idle;
 		}

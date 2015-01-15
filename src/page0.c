@@ -524,7 +524,7 @@ void main(void) __naked {
 					{
 						int sa = eeprom_read_config(EEADR_SET_MENU_ITEM(SA));
 						if(sa){
-							int diff = temperature - eeprom_read_config(EEADR_SET_MENU_ITEM(SP));
+							int diff = temperature - setpoint;
 							if(diff < 0){
 								diff = -diff;
 							} 

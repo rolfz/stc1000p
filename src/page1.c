@@ -20,29 +20,43 @@
  *
  */
 
-#define __16f1828
-#include "pic14/pic16f1828.h"
-#include "stc1000p.h"
+
+#include <p18cxxx.h>
+#include "./stc1000p.h"
 
 #define reset() { __asm RESET __endasm; }
 
 /* Helpful defines to handle buttons */
+// low-byte is last press, high byte is previous mesure
+
 #define BTN_PWR			0x88
 #define BTN_S			0x44
 #define BTN_UP			0x22
 #define BTN_DOWN		0x11
 
-#define BTN_IDLE(btn)			((_buttons & (btn)) == 0x00)
-#define BTN_PRESSED(btn)		((_buttons & (btn)) == ((btn) & 0x0f))
-#define BTN_HELD(btn)			((_buttons & (btn)) == (btn))
-#define BTN_RELEASED(btn)		((_buttons & (btn)) == ((btn) & 0xf0))
-#define BTN_HELD_OR_RELEASED(btn)	((_buttons & (btn) & 0xf0))
+
+#define BTN_IDLE(btn)               ((_buttons & (btn)) == 0x00)
+#define BTN_PRESSED(btn)            ((_buttons & (btn)) == ((btn) & 0x0f)) // only test low-byte match
+#define BTN_HELD(btn)               ((_buttons & (btn)) == (btn)) // test multiple press
+#define BTN_RELEASED(btn)           ((_buttons & (btn)) == ((btn) & 0xf0)) // check if previous was pressed, last  is released
+#define BTN_HELD_OR_RELEASED(btn)	((_buttons & (btn) & 0xf0)) 
 
 /* Help to convert menu item number and config item number to an EEPROM config address */
 #define EEADR_MENU_ITEM(mi, ci)		((mi)*19 + (ci))
 
 extern unsigned int heating_delay;
 extern unsigned int cooling_delay;
+
+#if defined (__18F2520)
+extern  char TMR1GE; // Menu on flag
+extern char menuON;
+//extern char RX9; // SA flash flag
+extern char alarmFlash;
+//char TX9; //  // 0=sens0 active, 1=sens1 active flag
+
+char menu01;
+char vPR6=112;
+#endif
 
 /* Set menu struct */
 struct s_setmenu {
@@ -57,12 +71,12 @@ struct s_setmenu {
 #define TO_STRUCT(name, led10ch, led1ch, led01ch, minv, maxv, dvc, dvf) \
     { led10ch, led1ch, led01ch, minv, maxv },
 
-static const struct s_setmenu setmenu[] = {
+const struct s_setmenu setmenu[] = {
 	SET_MENU_DATA(TO_STRUCT)
 };
 
 /* Helpers to constrain user input  */
-static int RANGE(int x, int min, int max){
+int RANGE(int x, int min, int max){
 	if(x>max)
 		return min;
 	if(x<min)
@@ -71,7 +85,7 @@ static int RANGE(int x, int min, int max){
 }
 
 /* Check and constrain a configuration value */
-static int check_config_value(int config_value, unsigned char eeadr){
+int check_config_value(int config_value, unsigned char eeadr){
 	if(eeadr < EEADR_SET_MENU){
 		while(eeadr >= 19){
 			eeadr-=19;
@@ -83,16 +97,24 @@ static int check_config_value(int config_value, unsigned char eeadr){
 		}
 	} else {
 		eeadr -= EEADR_SET_MENU;
-		config_value = RANGE(config_value, setmenu[eeadr].min, setmenu[eeadr].max);
+            config_value = RANGE(config_value, setmenu[eeadr].min, setmenu[eeadr].max);
 	}
 	return config_value;
 }
 
-static void prx_to_led(unsigned char run_mode, unsigned char is_menu){
-	led_e.e_negative = 1;
+void prx_to_led(unsigned char run_mode, unsigned char is_menu){
+    
+#if defined (__18F2520)
+	led_e.e_negative = 0;
+	led_e.e_deg = 0;
+	led_e.e_c = 0;
+	led_e.e_point = 0;
+#else
+    led_e.e_negative = 1;
 	led_e.e_deg = 1;
 	led_e.e_c = 1;
 	led_e.e_point = 1;
+#endif
 	if(run_mode<NO_OF_PROFILES){
 		led_10.raw = LED_P;
 		led_1.raw = LED_r;
@@ -142,40 +164,49 @@ enum menu_states {
  * properly, so the variables below were moved from button_menu_fsm()
  * and made global.
  */
-static unsigned char state=state_idle;
-static unsigned char menu_item=0, config_item=0, countdown=0;
-static int config_value;
-static unsigned char _buttons = 0;
+unsigned char state=state_idle;
+unsigned char menu_item=0, config_item=0, countdown=0;
+int config_value;
+unsigned char _buttons = 0;
 
 /* This is the button input and menu handling function.
  * arguments: none
  * returns: nothing
  */
-void button_menu_fsm(){
+void button_menu_fsm(void){
 	{
-		unsigned char trisc, latb;
+		unsigned char ledtris, latcommon;
 
 		// Disable interrups while reading buttons
-		GIE = 0;
-
+		INTCONbits.GIE=0;
+        
 		// Save registers that interferes with LED's
-		latb = LATB;
-		trisc = TRISC;
+		latcommon = DIG_PORT;
+		ledtris = LED_TRIS;
+#if defined (__18F2520)
 
-		LATB = 0b00000000; // Turn off LED's
-		TRISC = 0b11011000; // Enable input for buttons
+        
+#endif
+        
+        DIG_PORT=0xf0;
+		LED_PORT= 0b00000000; // Turn off LED's
+		LED_TRIS= 0b00110000; // Enable input for buttons
+        
+        // enable pull-up to mesure keys
+        INTCON2bits.NOT_RBPU=0;
+        
 
-		_buttons = (_buttons << 1) | RC7; // pwr
-		_buttons = (_buttons << 1) | RC4; // s
-		_buttons = (_buttons << 1) | RC6; // up
-		_buttons = (_buttons << 1) | RC3; // down
+        _buttons = (_buttons << 1) | KB_PWR; // pwr // bit 3
+		_buttons = (_buttons << 1) | KB_SET; // set // bit 2
+		_buttons = (_buttons << 1) | KB_UP;  // up  // bit 1
+		_buttons = (_buttons << 1) | KB_DWN; // down// bit 0
 
 		// Restore registers
-		LATB = latb;
-		TRISC = trisc;
-
+		DIG_PORT = latcommon;
+		LED_TRIS = ledtris;
+        
 		// Reenable interrups
-		GIE = 1;
+		INTCONbits.GIE=1;
 	}
 
 	if(countdown){
@@ -203,9 +234,9 @@ void button_menu_fsm(){
 
 	case state_show_version:
 		int_to_led(STC1000P_VERSION);
-		led_10.decimal = 0;
-		led_e.e_deg = 1;
-		led_e.e_c = 1;
+		led_10.decimal = 1;
+		led_e.e_deg = 0;
+		led_e.e_c = 0;
 		if(!BTN_HELD(BTN_UP | BTN_DOWN)){
 			state=state_idle;
 		}
@@ -216,9 +247,9 @@ void button_menu_fsm(){
 			unsigned char pwr_on = eeprom_read_config(EEADR_POWER_ON);
 			eeprom_write_config(EEADR_POWER_ON, !pwr_on);
 			if(pwr_on){
-				LATA0 = 0;
-				LATA4 = 0;
-				LATA5 = 0;
+				BUZ = 0;
+				REL_HEAT = 0;
+				REL_COOL = 0;
 				TMR4ON = 0;
 				TMR4IF = 0;
 			} else {
@@ -229,7 +260,8 @@ void button_menu_fsm(){
 			state = state_idle;
 		} else if(!BTN_HELD(BTN_PWR)){
 #if defined PB2
-			TX9 = !TX9;
+//			TX9 = !TX9;
+            menu01 = !menu01;
 #endif
 			state = state_idle;
 		}
@@ -302,9 +334,15 @@ void button_menu_fsm(){
 		}
 		break;
 	case state_show_config_item:
-		led_e.e_negative = 1;
+#if defined (__18F2520)
+		led_e.e_negative = 0;
+		led_e.e_deg = 0;
+		led_e.e_c = 0;
+#else
+        led_e.e_negative = 1;
 		led_e.e_deg = 1;
 		led_e.e_c = 1;
+#endif
 		if(menu_item < SET_MENU_ITEM_NO){
 			if(config_item & 0x1) {
 				led_10.raw = LED_d;
@@ -352,12 +390,12 @@ void button_menu_fsm(){
 				if(config_item > SET_MENU_SIZE-1){
 					config_item = SET_MENU_SIZE-1;
 				}
-chk_skip_menu_item:
+    chk_skip_menu_item:
 				if((unsigned char)eeprom_read_config(EEADR_SET_MENU_ITEM(rn)) >= THERMOSTAT_MODE){
 					if(config_item == St){
-						config_item += 2;
+						config_item += 9;
 					}else if(config_item == dh){
-						config_item -= 2;
+						config_item -= 9;
 					}
 				}
 			}
@@ -399,20 +437,21 @@ chk_skip_menu_item:
 				state = state_show_config_item;
 			} else if(BTN_HELD_OR_RELEASED(BTN_UP)) {
 				config_value++;
-				if(config_value > 1000){
+				if(config_value < 1000){
 					config_value+=9;
 				}
 				/* Jump to exit code shared with BTN_DOWN case */
 				goto chk_cfg_acc_label;
+                
 			} else if(BTN_HELD_OR_RELEASED(BTN_DOWN)) {
 				config_value--;
-				if(config_value > 1000){
+				if(config_value < 1000){ 
 					config_value-=9;
 				}
 chk_cfg_acc_label:
 				config_value = check_config_value(config_value, adr);
-				if(PR6 > 30){
-					PR6-=8;
+				if(vPR6 > 13){ // was 30
+					vPR6-=3; // was 8
 				}
 				state = state_show_config_value;
 			} else if(BTN_RELEASED(BTN_S)){
@@ -435,7 +474,7 @@ chk_cfg_acc_label:
 				eeprom_write_config(adr, config_value);
 				state=state_show_config_item;
 			} else {
-				PR6 = 250;
+				vPR6 = 112;
 			}
 		}
 		break;
@@ -446,6 +485,7 @@ chk_cfg_acc_label:
 	/* This is last resort...
 	 * Start using unused registers for general purpose
 	 * Use TMR1GE to flag if display should show temperature or not */
-	TMR1GE = (state==0);
+//	TMR1GE = (state==0);
+	menuON = (state==0);
 
 }

@@ -18,25 +18,66 @@
  * You should have received a copy of the GNU General Public License
  * along with STC1000+.  If not, see <http://www.gnu.org/licenses/>.
  *
+ * 
+ * ADDED BY ROLF ZIEGLER DURING PIC18f Implementation
+ * 
+ * B2 means 2nd sensor
+ * COM means communication enabled
+ * Timer0   433mhz transmission
+ * Timer1                                           32khz timer to get 1sec pulses
+ * Timer2   display led data interrupt 1ms cycle    general 1ms timer
+ * Timer3
+ * Timer4   reading sensor time
+ * Timer6   handles buttons pressed        
+ * 
  */
 
-#define __16f1828
-#include "pic14/pic16f1828.h"
+
+#include <p18cxxx.h>
+
 #include "stc1000p.h"
 
 /* Defines */
-#define ClrWdt() { __asm CLRWDT __endasm; }
 
 /* Configuration words */
-unsigned int __at _CONFIG1 __CONFIG1 = 0xFD4;
-unsigned int __at _CONFIG2 __CONFIG2 = 0x3AFF;
+///unsigned int __at _CONFIG1 __CONFIG1 = 0xFD4;
+///unsigned int __at _CONFIG2 __CONFIG2 = 0x3AFF;
+
+#pragma config OSC = INTIO67	// You can write this way
+#pragma config FCMEN = OFF		  // OR this way 
+#pragma config MCLRE = ON
+#pragma config IESO = OFF 
+#pragma config PWRT = OFF // power up timer
+#pragma config BOREN = OFF                                     
+//#pragma config BORV = 3
+//#pragma config VREGEN = OFF
+#if defined (__DEBUG)
+#pragma config WDT = OFF
+#else
+#pragma config WDT = ON
+#endif
+#pragma config CP0 = OFF, CP1 = OFF //, CP2 = OFF, CP3 = OFF
+#pragma config CPB = OFF
+#pragma config CPD = OFF
+#pragma config WRT0 = OFF, WRT1 = OFF //, WRT2 = OFF, WRT3 = OFF
+#pragma config LVP = OFF
+#pragma config DEBUG = ON//#pragma config LPT1OSC = ON
 
 /* Temperature lookup table  */
 #ifdef FAHRENHEIT
 const int ad_lookup[] = { 0, -555, -319, -167, -49, 48, 134, 211, 282, 348, 412, 474, 534, 593, 652, 711, 770, 831, 893, 957, 1025, 1096, 1172, 1253, 1343, 1444, 1559, 1694, 1860, 2078, 2397, 2987 };
 #else  // CELSIUS
-const int ad_lookup[] = { 0, -486, -355, -270, -205, -151, -104, -61, -21, 16, 51, 85, 119, 152, 184, 217, 250, 284, 318, 354, 391, 431, 473, 519, 569, 624, 688, 763, 856, 977, 1154, 1482 };
+//const int ad_lookup[] = { 0, -486, -355, -270, -205, -151, -104, -61, -21, 16, 51, 85, 119, 152, 184, 217, 250, 284, 318, 354, 391, 431, 473, 519, 569, 624, 688, 763, 856, 977, 1154, 1482 };
+
+// table starting at -25deg with value 0, increasing by 5 deg per step up to 130deg C = 32 values
+// Source of the table is an interpolation based on mesured values (-10deg freezer, 0deg melting ice, 100deg boiling water)
+// http://www.thinksrs.com/downloads/programs/Therm%20Calc/NTCCalibrator/NTCcalculator.htm
+const int ad_lookup[] = {-384, -358, -329, -295, -259, -220, -178, -135, -92, -45, -1, 44, 85, 127, 163, 203, 231, 263, 287, 312, 333, 353, 370, 386, 400, 412, 422, 432, 440,448,454,510 };
+
 #endif
+
+#define TCORRECTION 600 // offset from unknown reason, allows to adjust deg. C with PIC18F2520
+
 
 /* LED character lookup table (0-15), includes hex */
 //unsigned const char led_lookup[] = { 0x3, 0xb7, 0xd, 0x25, 0xb1, 0x61, 0x41, 0x37, 0x1, 0x21, 0x5, 0xc1, 0xcd, 0x85, 0x9, 0x59 };
@@ -44,10 +85,15 @@ const int ad_lookup[] = { 0, -486, -355, -270, -205, -151, -104, -61, -21, 16, 5
 unsigned const char led_lookup[] = { LED_0, LED_1, LED_2, LED_3, LED_4, LED_5, LED_6, LED_7, LED_8, LED_9 };
 
 /* Global variables to hold LED data (for multiplexing purposes) */
-led_e_t led_e = {0xff};
-led_t led_10, led_1, led_01;
+led_e_t led_e = {0};
+led_t led_10, led_1, led_01 ={0};
 
-static int temperature=0;
+//char rom digi[4]=  {0xf0-0x80,0xf0-0x20,0xf0-0x40,0xf0-0x10};
+    
+int temperature=0;
+    
+#define SAMPLES 64L
+
 #if defined PB2
 static int temperature2=0;
 #elif defined COM
@@ -64,6 +110,25 @@ static volatile unsigned char fo433_send_space=0;
 static unsigned char fo433_sec_count = 24;
 #endif
 
+#if defined(__18F2520)
+// we simulate timer 4 and 6 in software
+// timer 6 with 60ms interval
+unsigned char TMR6IF=0;
+unsigned char tmr6cnt=0;
+#define TMR6_MAX  112 // 112ms count to get 1 sec pulse
+// timer 4 with 120ms interval
+unsigned char TMR4IF=0;
+unsigned char TMR4ON=1;
+unsigned char tmr4cnt=0;
+#define TMR4_MAX 60 // 60ms count freq
+
+//char TMR1GE=0;   // Menu on flag, avoid display temp when menu is on.
+char menuON=0;
+char alarmFlash=0; 
+//RX9=0;      // SA flash flag
+//extern char TX9; // 0=sens0 active, 1=sens1 active
+
+#endif
 
 /* Functions.
  * Note: Functions used from other page cannot be static, but functions
@@ -81,12 +146,12 @@ unsigned int eeprom_read_config(unsigned char eeprom_address){
 	eeprom_address = (eeprom_address << 1);
 
 	do {
-		EEADRL = eeprom_address; // Data Memory Address to read
-		CFGS = 0; // Deselect config space
-		EEPGD = 0; // Point to DATA memory
-		RD = 1; // Enable read
+		EEADR = eeprom_address; // Data Memory Address to read
+		EECON1bits.EEPGD = 0; // Point to DATA memory
+		EECON1bits.CFGS = 0; // Deselect config space
+		EECON1bits.RD = 1; // Enable read
 
-		data = ((((unsigned int) EEDATL) << 8) | (data >> 8));
+		data = ((((unsigned int) EEDATA) << 8) | (data >> 8));
 	} while(!(eeprom_address++ & 0x1));
 
 	return data; // Return data
@@ -108,38 +173,38 @@ void eeprom_write_config(unsigned char eeprom_address,unsigned int data)
 
 	do {
 		// Address to write
-	    EEADRL = eeprom_address;
+	    EEADR = eeprom_address;
 	    // Data to write
-	    EEDATL = (unsigned char) data;
-	    // Deselect configuration space
-	    CFGS = 0;
+	    EEDATA = (unsigned char) data;
 	    //Point to DATA memory
-	    EEPGD = 0;
+	    EECON1bits.EEPGD = 0;
+	    // Deselect configuration space
+	    EECON1bits.CFGS = 0;
 	    // Enable write
-	    WREN = 1;
+	    EECON1bits.WREN = 1;
 
 	    // Disable interrupts during write
-	    GIE = 0;
+	    INTCONbits.GIE=0;
 
 	    // Write magic words to EECON2
 	    EECON2 = 0x55;
 	    EECON2 = 0xAA;
 
 	    // Initiate a write cycle
-	    WR = 1;
+	    EECON1bits.WR = 1;
 
 	    // Re-enable interrupts
-	    GIE = 1;
+	    INTCONbits.GIE=1;
 
 	    // Disable writes
-	    WREN = 0;
+	    EECON1bits.WREN = 0;
 
 	    // Wait for write to complete
-	    while(WR);
+	    while(EECON1bits.WR);
 
 	    // Clear write complete flag (not really needed
 	    // as we use WR for check, but is nice)
-	    EEIF=0;
+	    PIR2bits.EEIF=0;
 
 	    // Shift data for next pass
 	    data = data >> 8;
@@ -148,7 +213,7 @@ void eeprom_write_config(unsigned char eeprom_address,unsigned int data)
 
 }
 
-static unsigned int divu10(unsigned int n) {
+unsigned int divu10(unsigned int n) {
 	unsigned int q, r;
 	q = (n >> 1) + (n >> 2);
 	q = q + (q >> 4);
@@ -163,9 +228,61 @@ static unsigned int divu10(unsigned int n) {
  *            decimal indicates if the value is multiplied by 10 (i.e. a temperature)
  * return: nothing
  */
+#if defined (__18F2520)
 void value_to_led(int value, unsigned char decimal) {
 	unsigned char i;
 
+	// Handle negative values
+	if (value < 0) {
+		led_e.e_negative = 1;
+		value = -value;
+	} else {
+		led_e.e_negative = 0;
+	}
+
+	// This assumes that only temperatures and all temperatures are decimal
+	if(decimal){
+		led_e.e_deg = 1;
+#ifdef FAHRENHEIT
+		led_e.e_c = 1;
+#else
+		led_e.e_c = 0;
+#endif // FAHRENHEIT
+	}
+    else led_e.e_deg = 0;
+    
+	// If temperature >= 100 we must lose decimal...
+	if (value >= 1000) {
+		value = divu10((unsigned int) value);
+		decimal = 0;
+	}
+
+	// Convert value to BCD and set LED outputs
+	if(value >= 100){
+		for(i=0; value >= 100; i++){
+			value -= 100;
+		}
+		led_10.raw = led_lookup[i & 0xf];
+	} else {
+		led_10.raw = LED_OFF; // Turn off led if zero (lose leading zeros)
+	}
+	if(value >= 10 || decimal || led_10.raw!=LED_OFF){ // If decimal, we want 1 leading zero
+		for(i=0; value >= 10; i++){
+			value -= 10;
+		}
+		led_1.raw = led_lookup[i];
+		if(decimal){
+			led_1.decimal = 1;
+		}
+	} else {
+		led_1.raw = LED_OFF; // Turn off led if zero (lose leading zeros)
+	}
+	led_01.raw = led_lookup[(unsigned char)value];
+}
+#else
+void value_to_led(int value, unsigned char decimal) {
+	unsigned char i;
+    
 	// Handle negative values
 	if (value < 0) {
 		led_e.e_negative = 0;
@@ -183,7 +300,7 @@ void value_to_led(int value, unsigned char decimal) {
 		led_e.e_c = 0;
 #endif // FAHRENHEIT
 	}
-
+    
 	// If temperature >= 100 we must lose decimal...
 	if (value >= 1000) {
 		value = divu10((unsigned int) value);
@@ -212,11 +329,11 @@ void value_to_led(int value, unsigned char decimal) {
 	}
 	led_01.raw = led_lookup[(unsigned char)value];
 }
-
+#endif
 /* To be called once every hour on the hour.
  * Updates EEPROM configuration when running profile.
  */
-static void update_profile(){
+void update_profile(void){
 	unsigned char profile_no = eeprom_read_config(EEADR_SET_MENU_ITEM(rn));
 
 	// Running profile?
@@ -282,7 +399,9 @@ static void update_profile(){
  */
 unsigned int cooling_delay = 60;  // Initial cooling delay
 unsigned int heating_delay = 60;  // Initial heating delay
-static void temperature_control(){
+
+void temperature_control(void){
+    
 	int setpoint = eeprom_read_config(EEADR_SET_MENU_ITEM(SP));
 #if defined PB2
 	int hysteresis2 = eeprom_read_config(EEADR_SET_MENU_ITEM(hy2));
@@ -297,23 +416,27 @@ static void temperature_control(){
 	}
 
 	// Set LED outputs
-	led_e.e_cool = !LATA4;
-	led_e.e_heat = !LATA5;
-
+#if defined (__18F2520)
+	led_e.e_cool = REL_COOL; // was lata4
+	led_e.e_heat = REL_HEAT;
+#else
+	led_e.e_cool = !REL_COOL; // was lata4
+	led_e.e_heat = !REL_HEAT;    
+#endif
 	// This is the thermostat logic
 #if defined PB2
-	if((LATA4 && (temperature <= setpoint || (probe2 && (temperature2 < (setpoint - hysteresis2))))) || (LATA5 && (temperature >= setpoint || (probe2 && (temperature2 > (setpoint + hysteresis2)))))){
+	if((REL_COOL && (temperature <= setpoint || (probe2 && (temperature2 < (setpoint - hysteresis2))))) || (REL_HEAT && (temperature >= setpoint || (probe2 && (temperature2 > (setpoint + hysteresis2)))))){
 #else
-	if((LATA4 && (temperature <= setpoint )) || (LATA5 && (temperature >= setpoint))){
+	if((REL_COOL && (temperature <= setpoint )) || (REL_HEAT && (temperature >= setpoint))){
 #endif
 		cooling_delay = eeprom_read_config(EEADR_SET_MENU_ITEM(cd)) << 6;
 		cooling_delay = cooling_delay - (cooling_delay >> 4);
 		heating_delay = eeprom_read_config(EEADR_SET_MENU_ITEM(hd)) << 6;
 		heating_delay = heating_delay - (heating_delay >> 4);
-		LATA4 = 0;
-		LATA5 = 0;
+		REL_COOL = 0;
+		REL_HEAT = 0;
 	}
-	else if(LATA4 == 0 && LATA5 == 0) {
+	else if(REL_COOL == 0 && REL_HEAT == 0) {
 		int hysteresis = eeprom_read_config(EEADR_SET_MENU_ITEM(hy));
 #ifdef PB2
 		hysteresis2 >>= 2; // Halve hysteresis 2
@@ -324,7 +447,7 @@ static void temperature_control(){
 			if (cooling_delay) {
 				led_e.e_cool = led_e.e_cool ^ (cooling_delay & 0x1); // Flash to indicate cooling delay
 			} else {
-				LATA4 = 1;
+				REL_COOL = 1;
 			}
 #if defined PB2
 		} else if ((temperature < setpoint - hysteresis) && (!probe2 || (temperature2 <= setpoint + hysteresis2))) {
@@ -334,57 +457,68 @@ static void temperature_control(){
 			if (heating_delay) {
 				led_e.e_heat = led_e.e_heat ^ (heating_delay & 0x1); // Flash to indicate heating delay
 			} else {
-				LATA5 = 1;
+				REL_HEAT = 1;
 			}
 		}
 	}
 }
 
-/* Initialize hardware etc, on startup.
+    
+/*******************************************************************************
+ *  Initialize hardware etc, on startup.
  * arguments: none
  * returns: nothing
  */
-static void init() {
-
+void init() {
+    int i;
+    
+    ADCON1 |= 0x0F;                 // Default all pins to digital
 	OSCCON = 0b01101010; // 4MHz
 
 	// Heat, cool as output, Thermistor as input, piezo output
 #if defined FO433
 	TRISA = 0b00001100;
 #else
-	TRISA = 0b00001110;
+	SENS_TRIS=0b10100011; // alternative with RA5 and RA7 as KEB input (free RB6/7 for debug)
+//	SENS_TRIS=0b00000011;
 #endif
-	LATA = 0; // Drive relays and piezo low
+	SENS_PORT= 0; // Drive relays and piezo low
 
-	// LED Common anodes
-	TRISB = 0;
-	LATB = 0;
+	// LED Common cathode C4-C7
+	DIG_PORT = 0xF0;
+	DIG_TRIS = 0b00001111;
 
-	// LED data (and buttons) output
-	TRISC = 0;
+	// LED data  output
+    LED_PORT = 0x00;
+	LED_TRIS = 0; // led 0-7
 
-	// Analog input on thermistor
-#if defined PB2
-	ANSELA = _ANSA1 |  _ANSA2 ;
-#else
-	ANSELA =  _ANSA2;
-#endif
-
+   	// Analog input on thermistor
+    ADCON1=0b00001101; // vref = vcc, RA0-RA1 as sensor input
+            
 	// AD clock FOSC/8 (FOSC = 4MHz)
-	ADCS0 = 1;
+	ADCON2bits.ADCS0=1; //0b100;
+
+    // AD acq time 8TAD
+    ADCON2bits.ACQT=0b100; 
+
+    
 	// Right justify AD result
-	ADFM = 1;
+	ADCON2bits.ADFM = 1;
 
 	// IMPORTANT FOR BUTTONS TO WORK!!! Disable analog input -> enables digital input
-	ANSELC = 0;
+	// ???????????? not required for PIC18F ANSELC = 0;
 
 	// Postscaler 1:1, Enable counter, prescaler 1:4
-	T2CON = 0b00000101;
+    T2CON=0;
+    T2CONbits.T2CKPS=1;
 	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:4-> 250kHz, 250 gives interrupt every 1 ms
 	PR2 = 250;
 	// Enable Timer2 interrupt
-	TMR2IE = 1;
-
+    T2CONbits.TMR2ON=1;
+    IPR1bits.TMR2IP=1; // high priority
+	PIE1bits.TMR2IE = 1;
+    
+#if defined (__P16F2428) 
 	// Postscaler 1:15, - , prescaler 1:16
 	T4CON = 0b01110010;
 	TMR4ON = eeprom_read_config(EEADR_POWER_ON);
@@ -395,7 +529,13 @@ static void init() {
 	T6CON = 0b00110111;
 	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:64-> 15.625kHz, 250 and postscale 1:6 -> 8.93Hz or 112ms
 	PR6 = 250;
-
+#elif defined(__18F2520)
+    // TMR4ON is flag in software
+	TMR4ON = eeprom_read_config(EEADR_POWER_ON);
+    vPR6 = 112;
+#endif
+    
+    
 #if defined COM
 	// Set PEIE and GIE (enable global interrupts), IOCIE
 	INTCON = 0b11001000;
@@ -403,7 +543,11 @@ static void init() {
 	IOCAN = 0;
 #else
 	// Set PEIE (enable peripheral interrupts, that is for timer2) and GIE (enable global interrupts)
-	INTCON = 0b11000000;
+
+    RCONbits.IPEN = 1;            //enable priority levels
+    INTCONbits.GIE=1;
+    INTCONbits.GIEH=1;
+    
 #endif
 
 #if defined FO433
@@ -420,8 +564,21 @@ static void init() {
  * Receives timer2 interrupts every millisecond.
  * Handles multiplexing of the LEDs.
  */
-static void interrupt_service_routine(void) __interrupt 0 {
 
+void high_isr(void);
+/*********************High priority interrupt vector **************************/
+#pragma code high_vector=0x08
+void interrupt_at_high_vector(void)
+{
+  _asm GOTO high_isr _endasm
+}
+
+#pragma code
+/*******************************High priority ISR *****************************/
+#pragma interrupt high_isr
+void high_isr (void)
+{
+static unsigned char latb=0;
 #ifdef COM
 	if(IOCAF1){
 
@@ -502,37 +659,45 @@ static void interrupt_service_routine(void) __interrupt 0 {
 		TMR0IF = 0;
 	}
 #endif
-	// Check for Timer 2 interrupt
+	// Check for Timer 2 interrupt (every 1ms)
 	// Kind of excessive when it's the only enabled interrupt
 	// but is nice as reference if more interrupts should be needed
-	if (TMR2IF) {
-		unsigned char latb = (LATB << 1);
-
+	if (PIR1bits.TMR2IF) {
+#if defined (__16F2626)
+        unsigned char latb = (DIG_PORT << 1);
+#elif defined (__18F2520)
+        
+        // lat b used for common cathode, inverted when writing to LED
+        latb<<=1;
+#endif
+        
 		if(latb == 0){
 			latb = 0x10;
 		}
-
-		TRISC = 0; // Ensure LED data pins are outputs
-		LATB = 0; // Disable LED's while switching
+        
+                
+		LED_TRIS = LEDOUT; // Ensure LED data pins are outputs
+		LED_PORT = LEDOFF; // Disable LED's while switching
 
 		// Multiplex LED's every millisecond
 		switch(latb) {
 			case 0x10:
-			LATC = led_10.raw;
+			LED_PORT = led_01.raw;
 			break;
 			case 0x20:
-			LATC = led_1.raw;
+			LED_PORT = led_10.raw;
 			break;
-			case 0x40:
-			LATC = led_01.raw;
+			case 0x40: 
+			LED_PORT = led_1.raw;
 			break;
 			case 0x80:
-			LATC = led_e.raw;
+			LED_PORT = led_e.raw;
 			break;
 		}
 
-		// Enable new LED
-		LATB = latb;
+		// Enable new LED Digit
+        // as cathode on digit, we reverse the bits
+		DIG_PORT = ~latb;
 
 #if defined COM
 		/* Reset communication state on timeout */
@@ -545,29 +710,61 @@ static void interrupt_service_routine(void) __interrupt 0 {
 		}
 #endif // COM
 
+#if defined (__18F2520)
+
+// software implementation of time 4 and 6 not available in 18f2520 hardware
+//            if(tmr6cnt++== TMR6_MAX){   // 112ms
+            if(tmr6cnt++ >= vPR6){   // 112ms
+                tmr6cnt=0;
+                TMR6IF=1;
+            }
+
+        if(TMR4ON){
+            
+            if(tmr4cnt++ == TMR4_MAX){  // 60ms
+                tmr4cnt=0;
+                TMR4IF=1;
+            };
+        }
+        
+#endif
+        
 		// Clear interrupt flag
-		TMR2IF = 0;
+		PIR1bits.TMR2IF = 0;
 	}
+    
+} // end ISR
+
+#define _ADON 1
+#define _CHS0 2
+#define _CHS1 4
+
+#define START_TCONV_1()		(ADCON0 = _CHS0 | _ADON)
+#define START_TCONV_2()		(ADCON0 = _CHS1 | _ADON)
+
+/******************************************************************************/
+unsigned int read_ad(unsigned int adfilter){
+
+    static unsigned long temp;
+	ADCON0bits.GO = 1;
+	while(ADCON0bits.GO);
+//	ADCON0bits.ADON = 0;
+    temp =((adfilter - (adfilter >> 6)) + ((ADRESH << 8) | ADRESL));
+	return (unsigned int)temp;
+
 }
 
-#define START_TCONV_1()		(ADCON0 = _CHS1 | _ADON)
-#define START_TCONV_2()		(ADCON0 = _CHS0 | _ADON)
-
-static unsigned int read_ad(unsigned int adfilter){
-	ADGO = 1;
-	while(ADGO);
-	ADON = 0;
-	return ((adfilter - (adfilter >> 6)) + ((ADRESH << 8) | ADRESL));
-}
-
-static int ad_to_temp(unsigned int adfilter){
+/******************************************************************************/
+int ad_to_temp(unsigned int adfilter){
 	unsigned char i;
-	long temp = 32;
+    long temp = 32;
 	unsigned char a = ((adfilter >> 5) & 0x3f); // Lower 6 bits
 	unsigned char b = ((adfilter >> 11) & 0x1f); // Upper 5 bits
 
 	// Interpolate between lookup table points
-	for (i = 0; i < 64; i++) {
+    
+    // Table is 32 words long = 64 bytes
+	for (i = 0; i < SAMPLES; i++) {
 		if(a <= i) {
 			temp += ad_lookup[b];
 		} else {
@@ -578,6 +775,40 @@ static int ad_to_temp(unsigned int adfilter){
 	// Divide by 64 to get back to normal temperature
 	return (temp >> 6);
 }
+
+/******************************************************************************/
+    int ad_to_temp2(unsigned int adfilter){
+
+#define MINTABLE -250
+#define TABLESTEP 50 // 1/10 of degree
+    
+    int temp = MINTABLE; // in 1/10 of deg.
+    char tabPtr=0;
+    int gapPos, delta=0;
+    int level;
+    level=(int)(adfilter/SAMPLES)-512;
+    
+    while((ad_lookup[tabPtr] < (level) )&& (tabPtr<32))
+        {
+            temp +=TABLESTEP; // we increment by 5 deg at each step
+            tabPtr++;
+        }
+    
+    // calculate gap in adc value between 2 points(5 deg). 
+    delta=ad_lookup[tabPtr]-ad_lookup[tabPtr-1];
+    
+    // calculate probe position within the gap 
+    gapPos=adfilter/SAMPLES-ad_lookup[tabPtr-1];
+    
+    // add the gap to the lookup value
+    
+    temp+=(delta*TABLESTEP/gapPos);
+    
+	// Divide by 64 to get back to normal temperature
+	return (temp);
+}
+
+
 
 #if defined COM
 enum com_states {
@@ -613,10 +844,10 @@ static void handle_com(unsigned const char rxdata){
 			data = temperature;
 			com_state = com_trans_data1;
 		} else if(rxdata == COM_READ_COOLING){
-			data = LATA4;
+			data = REL_COOL;
 			com_state = com_trans_data1;
 		} else if(rxdata == COM_READ_HEATING){
-			data = LATA5;
+			data = REL_HEAT;
 			com_state = com_trans_data1;
 		}
 	} else if(com_state == com_recv_addr){
@@ -689,7 +920,7 @@ static void fo433_fsm(){
 	} else if(fo433_state == fo433_temp_low){
 		fo433_data = (unsigned char) t;
 	} else if(fo433_state == fo433_humidity){
-		fo433_data = (LATA5 << 6) | (LATA4 << 4);
+		fo433_data = (REL_HEAT << 6) | (REL_COOL << 4);
 	} else if(fo433_state == fo433_crc){
 		fo433_data = crc;
 	}
@@ -717,20 +948,40 @@ static void fo433_fsm(){
 
 #endif
 
-/*
+unsigned int ad_filter;
+unsigned int millisx60=0;
+/******************************************************************************
  * Main entry point.
  */
-void main(void) __naked {
-	unsigned int millisx60=0;
-	unsigned int ad_filter=0x7fff;
+    
+void main(void)  {
+    
+//  static unsigned int millisx60=0;
+//	static unsigned int ad_filter=0x7ffe; // equals to 512*64 samples = around 0
+//	static unsigned int ad_filter;
+    char i;
 #if defined PB2
-	unsigned int ad_filter2=0x7fff;
+	unsigned int ad_filter2=0x7ffe;
 #endif
 
 	init();
+    
+ 	START_TCONV_1();   
+    
+    //    init_adc buffer
+    for(i=0;i<SAMPLES;i++){
+        ad_filter=read_ad(ad_filter);
+    }
+    
 
-	START_TCONV_1();
 
+#ifdef TEST_1DIGIT
+    while(1){
+				led_e.e_negative = 1;
+				led_10.raw = LED_OFF;
+				led_1.raw = led_01.raw = LED_OFF;
+    }
+#endif
 	//Loop forever
 	while (1) {
 
@@ -751,8 +1002,8 @@ void main(void) __naked {
 			fo433_state++;
 		}
 #endif
-
-		if(TMR6IF) {
+          
+		if(TMR6IF) { 
 
 			// Handle button press and menu
 			button_menu_fsm();
@@ -773,6 +1024,7 @@ void main(void) __naked {
 
 			if(millisx60 & 0x1){
 				ad_filter = read_ad(ad_filter);
+
 #if defined PB2
 				START_TCONV_2();
 			} else {
@@ -786,6 +1038,7 @@ void main(void) __naked {
 			if((millisx60 & 0xf) == 0) {
 
 				temperature = ad_to_temp(ad_filter) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
+//				temperature = ad_to_temp(ad_filter) +TCORRECTION+ eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
 #if defined PB2
 				temperature2 = ad_to_temp(ad_filter2) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc2));
 #endif
@@ -802,18 +1055,18 @@ void main(void) __naked {
 #endif
 
 				// Alarm on sensor error (AD result out of range)
-				LATA0 = ((ad_filter>>8) >= 248 || (ad_filter>>8) <= 8) 
+				BUZ = ((ad_filter>>8) >= 248 || (ad_filter>>8) <= 8) 
 #if defined PB2
-					|| (eeprom_read_config(EEADR_SET_MENU_ITEM(Pb)) && ((ad_filter2>>8) >= 248 || (ad_filter2>>8) <= 8))
+					 (eeprom_read_config(EEADR_SET_MENU_ITEM(Pb)) && ((ad_filter2>>8) >= 248 || (ad_filter2>>8) <= 8))
 #endif
 				;
 
-				if(LATA0){ // On alarm, disable outputs
+				if(BUZ){ // On alarm, disable outputs
 					led_10.raw = LED_A;
 					led_1.raw = LED_L;
 					led_e.raw = led_01.raw = LED_OFF;
-					LATA4 = 0;
-					LATA5 = 0;
+					REL_COOL = 0;
+					REL_HEAT = 0;
 					cooling_delay = heating_delay = 60;
 				} else {
 					// Update running profile every hour (if there is one)
@@ -840,9 +1093,9 @@ void main(void) __naked {
 							} 
 							if(sa < 0){
 								sa = -sa;
-								LATA0 = diff <= sa;
+								BUZ = diff <= sa;
 							} else {
-								LATA0 = diff >= sa;
+								BUZ = diff >= sa;
 							}
 						}
 					}
@@ -851,15 +1104,15 @@ void main(void) __naked {
 					temperature_control();
 
 					// Show temperature if menu is idle
-					if(TMR1GE){
-						if(LATA0 && RX9){
+					if(menuON){ // was TMR1GE
+						if(BUZ && alarmFlash){ //RX9 ){ 
 							led_10.raw = LED_S;
 							led_1.raw = LED_A;
 							led_01.raw = LED_OFF;
 						} else {
 #if defined PB2
-							led_e.e_point = !TX9;
-							if(TX9){
+							led_e.e_point = !memu01; // was TX9
+							if(menu01){ // was TX9
 								temperature_to_led(temperature2);
 							} else {
 								temperature_to_led(temperature);
@@ -868,16 +1121,17 @@ void main(void) __naked {
 							temperature_to_led(temperature);
 #endif
 						}
-						RX9 = !RX9;
+//						RX9 = !RX9;
+                        alarmFlash!=alarmFlash;
 					}
 				}
 			} // End 1 sec section
-
-			// Reset timer flag
+            
+        	// Reset timer flag
 			TMR4IF = 0;
 		}
-
 		// Reset watchdog
 		ClrWdt();
-	}
-}
+	} // end while(1)
+} // end main
+

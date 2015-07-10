@@ -18,6 +18,8 @@
  * You should have received a copy of the GNU General Public License
  * along with STC1000+.  If not, see <http://www.gnu.org/licenses/>.
  *
+ *
+ * Rewored version to support PIC18F2520. Rolf Ziegler June 2015
  */
 
 

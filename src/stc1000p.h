@@ -47,13 +47,116 @@
  *                --------    *    --------   *   ----  *
  *                  4         0      4        0    4    0
  *
- *
- *
+ *  
+ *                                     PIC18F2520
+ *                                    ------------
+ *                              MCLR_ | 1     28 | RB7 LED7/KB-SET/PGD
+ *                          SENS2 RA0 | 2     27 | RB6 LED6/KB-DWN/PGC
+ *                          SENS1 RA1 | 3     26 | RB5 LED5/KB-PWR
+ *                          REL1  RA2 | 4     25 | RB4 LED4/KB-UP
+ *                          REL2  RA3 | 5     24 | RB3 LED3
+ *                          BUZ   RA4 | 6     23 | RB2 LED3
+ *                          NC    RA5 | 7     22 | RB1 LED1
+ *                                VSS | 8     21 | RB0 LED0
+ *                          NC    RA7 | 9     20 | VDD 
+ *                          REL3  RA6 | 10    19 | VSS
+ *                    32khz OSC1  RC0 | 11    18 | RC7 LED Common cathode sign digit
+ *                          OSC2  RC1 | 12    17 | RC6 LED Common cathode 0.1's digit
+ *                          IR    RC2 | 13    16 | RC5 LED Common cathode 1.0's digit
+ *                          NC    RC3 | 14    15 | RC4 LED Common cathode 10.0's digit
+ *                                    ------------
+ *          IR sensor and 32khz oscillator not yet implemented
+ * 
+ *          PIC18f2520 version common cathode, leds have different layout !!!!
+ * 
+ *              * 5    --------  
+ *                    /   0   /  
+ *                 5 /       / 1 
+ *                   -------     
+ *           *     /   6   /     
+ *           4  4 /       / 2    
+ *                --------    *   
+ *                  3         7   
+ * 
  *
  */
 
 #ifndef __STC1000P_H__
 #define __STC1000P_H__
+
+
+// IO definitions added by Rolf Ziegler June 2015
+//#define PB2
+#if defined  (__18F2520)
+#define REL_HEAT     LATAbits.LATA2
+#define REL_COOL     LATAbits.LATA3
+#define BUZ      LATAbits.LATA4
+#define SENS1    PORTAbits.RA0
+#define SENS2    PORTAbits.RA1
+#define SENS_TRIS TRISA
+#define SENS_PORT LATA
+
+#define LED0    LATBbits.LATB0
+#define LED1    LATBbits.LATB1
+#define LED2    LATBbits.LATB2
+#define LED3    LATBbits.LATB3
+#define LED4    LATBbits.LATB4
+#define LED5    LATBbits.LATB5
+#define LED6    LATBbits.LATB6
+#define LED7    LATBbits.LATB7
+#define LED_PORT  LATB
+#define LED_TRIS TRISB
+
+#define LEDOUT 0x00
+#define LEDOFF 0x00
+
+#define DIG_PORT LATC // C4-7
+#define DIG_TRIS TRISC
+
+#define KB_UP      !PORTBbits.RB4
+#define KB_PWR     !PORTBbits.RB5
+//#define KB_DWN     PORTBbits.RB6 // moved for debugging reasons 
+#define KB_DWN    !PORTAbits.RA7 
+//#define KB_SET    !PORTBbits.RB7 // B6 and B7 are used by pickit2 and ICD3 for debugging
+#define KB_SET    !PORTAbits.RA5
+#define KB_PORT     PORTB
+#define KB_TRIS     TRISB
+
+#elif defined (__pic16F1828) // pic18 compiler not compatible, not tested
+#define SENS1        PORTAbits.RA1
+#define SENS2        PORTAbits.RA2
+#define REL_HEAT     LATAbits.LATA5 // A3 does not exist
+#define REL_COOL     LATAbits.LATA4
+#define BUZ          LATAbits.LATA0
+#define SENS_TRIS    TRISA
+#define SENS_PORT    LATA
+
+#define LED0    LATCbits.LATC0
+#define LED1    LATCbits.LATC1
+#define LED2    LATCbits.LATC2
+#define LED3    LATCbits.LATC4
+#define LED5    LATCbits.LATC5
+#define LED6    LATCbits.LATC6
+#define LED7    LATCbits.LATC7
+#define LED_PORT  LATC
+#define LED_TRIS TRISC
+
+#define LEDOUT 0x00
+#define LEDOFF 0x00
+
+#define DIG_PORT LATB // C4-7
+#define DIG_TRIS TRISB
+
+#define KB_UP      PORTCbits.RC4
+#define KB_PWR     PORTCbits.RC5
+#define KB_DWN     PORTCbits.RC6
+#define KB_SET     PORTCbits.RC7
+#define KB_PORT     PORTC
+#define KB_TRIS     TRISC
+
+#else
+#error PROCESSOR/PIC NOT SUPPORTED
+#endif
 
 /* Define STC-1000+ version number (XYY, X=major, YY=minor) */
 /* Also, keep track of last version that has changes in EEPROM layout */
@@ -71,10 +174,10 @@
 #define SP_ALARM_MIN		(-800)
 #define SP_ALARM_MAX		(800)
 #else  // CELSIUS
-#define TEMP_MAX		(1400)
-#define TEMP_MIN		(-400)
-#define TEMP_CORR_MAX		(50)
-#define TEMP_CORR_MIN		(-50)
+#define TEMP_MAX            (1400)
+#define TEMP_MIN            (-400)
+#define TEMP_CORR_MAX		(800) // changed by rz
+#define TEMP_CORR_MIN		(-800)// changed by rz
 #define TEMP_HYST_1_MAX		(50)
 #define TEMP_HYST_2_MAX		(250)
 #define SP_ALARM_MIN		(-400)
@@ -124,6 +227,7 @@ enum set_menu_enum {
 
 #define SET_MENU_SIZE				(sizeof(setmenu)/sizeof(setmenu[0]))
 
+#if defined (__16F1828) 
 #define LED_OFF	0xff
 #define LED_0	0x3
 #define LED_1	0xb7
@@ -157,7 +261,43 @@ enum set_menu_enum {
 #define LED_t	0xc9
 #define LED_U	0x83
 #define LED_y	0xa1
-
+#elif defined (__18F2520)
+// LED_PORT = Anode, segments, 8 bits
+// DIG_PORT = Cathode, digit 4 bits
+#define LED_OFF	0b00000000
+#define LED_0	0b00111111
+#define LED_1	0b00000110
+#define LED_2	0b01011011
+#define LED_3	0b01001111
+#define LED_4	0b01100110
+#define LED_5	0b01101101
+#define LED_6	0b01111100
+#define LED_7	0b00000111
+#define LED_8	0b01111111
+#define LED_9	0b01100111
+#define LED_A	0b01110111
+#define LED_a	0b01011100
+#define LED_b	0b01111100
+#define LED_C	0b00111001
+#define LED_c	0b01011000
+#define LED_d	0b01011110
+#define LED_e	0b01111001
+#define LED_E	0b01111001
+#define LED_F	0b01110001
+#define LED_H	0b01110110
+#define LED_h	0b01110100
+#define LED_I	0b00000110
+#define LED_J	0b00001110
+#define LED_L	0b00111000
+#define LED_n	0b01010100
+#define LED_O	0b00111111
+#define LED_P	0b01110011
+#define LED_r	0b01010000
+#define LED_S	0b01101101
+#define LED_t	0b01111000
+#define LED_U	0b00111110
+#define LED_y	0b01101110
+#endif
 /* Declare functions and variables from Page 0 */
 
 #define COM_READ_EEPROM		0x20
@@ -165,9 +305,10 @@ enum set_menu_enum {
 #define COM_READ_TEMP		0x01
 #define COM_READ_COOLING	0x02
 #define COM_READ_HEATING	0x03
-#define COM_ACK			0x9A
-#define COM_NACK		0x66
-
+#define COM_ACK             0x9A
+#define COM_NACK            0x66
+   
+#if defined (__16f1828) 
 typedef union
 {
 	unsigned char raw;
@@ -184,7 +325,6 @@ typedef union
 	  unsigned e_cool               : 1;
 	  };
 } led_e_t;
-
 typedef union
 {
 	unsigned char raw;
@@ -198,13 +338,65 @@ typedef union
 	  unsigned bottom		: 1;
 	  unsigned lower_left		: 1;
 	  unsigned upper_right		: 1;
-	  unsigned top			: 1;
+      unsigned top : 1;
+    };
+} led_t;
+
+
+#elif defined (__18F2520)
+typedef union
+{
+	unsigned char raw;
+
+	struct
+	  {
+	  unsigned e_set                : 1; // dot
+	  unsigned e_c1                 : 1; // upper one
+   	  unsigned e_c                  : 1; // lower one
+	  unsigned e_deg                : 1; // low point
+	  unsigned e_point              : 1; // mid point
+	  unsigned e_cool               : 1; // cooling sign
+	  unsigned e_negative           : 1; // negative sign
+   	  unsigned e_heat               : 1; // heating sign
+	  };
+} led_e_t;
+
+
+typedef union
+{
+	unsigned char raw;
+
+	struct
+	  {
+	  unsigned middle		: 1;
+	  unsigned upper_left		: 1;
+	  unsigned lower_right          : 1;
+	  unsigned bottom		: 1;
+	  unsigned lower_left		: 1;
+	  unsigned upper_right		: 1;
+      unsigned top : 1;
+   	  unsigned decimal		: 1;
 	  };
 } led_t;
+
+typedef struct
+    {
+    unsigned inmenu :1;
+    unsigned temp1  :1;
+    unsigned binter :1;
+    unsigned :1;
+    unsigned :1;
+    unsigned :1;
+    unsigned :1;
+    unsigned :1;
+    }flag_t;
+#endif
 
 extern led_e_t led_e;
 extern led_t led_10, led_1, led_01;
 extern unsigned const char led_lookup[];
+
+extern char menu01;
 
 extern unsigned int eeprom_read_config(unsigned char eeprom_address);
 extern void eeprom_write_config(unsigned char eeprom_address,unsigned int data);
@@ -213,6 +405,13 @@ extern void value_to_led(int value, unsigned char decimal);
 #define temperature_to_led(v)	value_to_led(v, 1)
 
 /* Declare functions and variables from Page 1 */
-extern void button_menu_fsm();
+ void button_menu_fsm(void);
+ void init(void);
+ void update_profile(void);
+ void temperature_control(void);
+ 
+extern unsigned char TMR4IF;
+extern unsigned char TMR4ON;
 
+extern char vPR6;
 #endif // __STC1000P_H__

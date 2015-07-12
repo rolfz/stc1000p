@@ -18,13 +18,11 @@
  * You should have received a copy of the GNU General Public License
  * along with STC1000+.  If not, see <http://www.gnu.org/licenses/>.
  *
- *
- * Rewored version to support PIC18F2520. Rolf Ziegler June 2015
  */
 
 
 #include <p18cxxx.h>
-#include "./stc1000p.h"
+#include "stc1000p.h"
 
 #define reset() { __asm RESET __endasm; }
 
@@ -198,7 +196,7 @@ void button_menu_fsm(void){
         INTCON2bits.NOT_RBPU=0;
         
 
-        _buttons = (_buttons << 1) | KB_PWR; // pwr // bit 3
+        	_buttons = (_buttons << 1) | KB_PWR; // pwr // bit 3
 		_buttons = (_buttons << 1) | KB_SET; // set // bit 2
 		_buttons = (_buttons << 1) | KB_UP;  // up  // bit 1
 		_buttons = (_buttons << 1) | KB_DWN; // down// bit 0
@@ -252,12 +250,12 @@ void button_menu_fsm(void){
 				BUZ = 0;
 				REL_HEAT = 0;
 				REL_COOL = 0;
-				TMR4ON = 0;
-				TMR4IF = 0;
+				tmr4on = 0;
+				tmr4if = 0;
 			} else {
 				heating_delay=60;
 				cooling_delay=60;
-				TMR4ON = 1;
+				tmr4on = 1;
 			}
 			state = state_idle;
 		} else if(!BTN_HELD(BTN_PWR)){
@@ -439,7 +437,7 @@ void button_menu_fsm(void){
 				state = state_show_config_item;
 			} else if(BTN_HELD_OR_RELEASED(BTN_UP)) {
 				config_value++;
-				if(config_value < 1000){
+				if(config_value > 1000){
 					config_value+=9;
 				}
 				/* Jump to exit code shared with BTN_DOWN case */
@@ -447,7 +445,7 @@ void button_menu_fsm(void){
                 
 			} else if(BTN_HELD_OR_RELEASED(BTN_DOWN)) {
 				config_value--;
-				if(config_value < 1000){ 
+				if(config_value > 1000){ 
 					config_value-=9;
 				}
 chk_cfg_acc_label:

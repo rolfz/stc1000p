@@ -34,7 +34,6 @@
 
 
 #include <p18cxxx.h>
-
 #include "stc1000p.h"
 
 /* Defines */
@@ -67,17 +66,13 @@
 #ifdef FAHRENHEIT
 const int ad_lookup[] = { 0, -555, -319, -167, -49, 48, 134, 211, 282, 348, 412, 474, 534, 593, 652, 711, 770, 831, 893, 957, 1025, 1096, 1172, 1253, 1343, 1444, 1559, 1694, 1860, 2078, 2397, 2987 };
 #else  // CELSIUS
-//const int ad_lookup[] = { 0, -486, -355, -270, -205, -151, -104, -61, -21, 16, 51, 85, 119, 152, 184, 217, 250, 284, 318, 354, 391, 431, 473, 519, 569, 624, 688, 763, 856, 977, 1154, 1482 };
+const int ad_lookup[] = { 0, -486, -355, -270, -205, -151, -104, -61, -21, 16, 51, 85, 119, 152, 184, 217, 250, 284, 318, 354, 391, 431, 473, 519, 569, 624, 688, 763, 856, 977, 1154, 1482 };
 
 // table starting at -25deg with value 0, increasing by 5 deg per step up to 130deg C = 32 values
 // Source of the table is an interpolation based on mesured values (-10deg freezer, 0deg melting ice, 100deg boiling water)
 // http://www.thinksrs.com/downloads/programs/Therm%20Calc/NTCCalibrator/NTCcalculator.htm
-const int ad_lookup[] = {-384, -358, -329, -295, -259, -220, -178, -135, -92, -45, -1, 44, 85, 127, 163, 203, 231, 263, 287, 312, 333, 353, 370, 386, 400, 412, 422, 432, 440,448,454,510 };
-
+//const int ad_lookup[] = {0, -430, -404, -372, -333, -288, -237, -181, -122, -61, -1, 44, 116, 170, 214, 257, 294, 327, 352, 376, 396, 413, 427, 439,449, 458, 466, 472, 482, 486, 496,501 };
 #endif
-
-#define TCORRECTION 600 // offset from unknown reason, allows to adjust deg. C with PIC18F2520
-
 
 /* LED character lookup table (0-15), includes hex */
 //unsigned const char led_lookup[] = { 0x3, 0xb7, 0xd, 0x25, 0xb1, 0x61, 0x41, 0x37, 0x1, 0x21, 0x5, 0xc1, 0xcd, 0x85, 0x9, 0x59 };
@@ -90,7 +85,7 @@ led_t led_10, led_1, led_01 ={0};
 
 //char rom digi[4]=  {0xf0-0x80,0xf0-0x20,0xf0-0x40,0xf0-0x10};
     
-int temperature=0;
+int temperature=0; // store temperature in 0.1deg steps (temp*10)
     
 #define SAMPLES 64L
 
@@ -113,12 +108,12 @@ static unsigned char fo433_sec_count = 24;
 #if defined(__18F2520)
 // we simulate timer 4 and 6 in software
 // timer 6 with 60ms interval
-unsigned char TMR6IF=0;
+unsigned char tmr6if=0;
 unsigned char tmr6cnt=0;
 #define TMR6_MAX  112 // 112ms count to get 1 sec pulse
 // timer 4 with 120ms interval
-unsigned char TMR4IF=0;
-unsigned char TMR4ON=1;
+unsigned char tmr4if=0;
+unsigned char tmr4on=1;
 unsigned char tmr4cnt=0;
 #define TMR4_MAX 60 // 60ms count freq
 
@@ -493,15 +488,17 @@ void init() {
 	LED_TRIS = 0; // led 0-7
 
    	// Analog input on thermistor
-    ADCON1=0b00001101; // vref = vcc, RA0-RA1 as sensor input
+    ADCON1=0b00001110; // vref = vcc, RA0 as sensor input
+    //ADCON1=0b00001101; // RA0-RA1 as sensor input
             
+    ADCON0=0;
+    
 	// AD clock FOSC/8 (FOSC = 4MHz)
-	ADCON2bits.ADCS0=1; //0b100;
+	ADCON2bits.ADCS0=1; 
 
     // AD acq time 8TAD
     ADCON2bits.ACQT=0b100; 
-
-    
+  
 	// Right justify AD result
 	ADCON2bits.ADFM = 1;
 
@@ -521,7 +518,8 @@ void init() {
 #if defined (__P16F2428) 
 	// Postscaler 1:15, - , prescaler 1:16
 	T4CON = 0b01110010;
-	TMR4ON = eeprom_read_config(EEADR_POWER_ON);
+    
+    tmr4on= eeprom_read_config(EEADR_POWER_ON);
 	// @4MHz, Timer 2 clock is FOSC/4 -> 1MHz prescale 1:16-> 62.5kHz, 250 and postscale 1:15 -> 16.66666 Hz or 60ms
 	PR4 = 250;
 
@@ -531,7 +529,7 @@ void init() {
 	PR6 = 250;
 #elif defined(__18F2520)
     // TMR4ON is flag in software
-	TMR4ON = eeprom_read_config(EEADR_POWER_ON);
+	tmr4on = eeprom_read_config(EEADR_POWER_ON);
     vPR6 = 112;
 #endif
     
@@ -674,7 +672,6 @@ static unsigned char latb=0;
 		if(latb == 0){
 			latb = 0x10;
 		}
-        
                 
 		LED_TRIS = LEDOUT; // Ensure LED data pins are outputs
 		LED_PORT = LEDOFF; // Disable LED's while switching
@@ -716,14 +713,14 @@ static unsigned char latb=0;
 //            if(tmr6cnt++== TMR6_MAX){   // 112ms
             if(tmr6cnt++ >= vPR6){   // 112ms
                 tmr6cnt=0;
-                TMR6IF=1;
+                tmr6if=1;
             }
 
-        if(TMR4ON){
+        if(tmr4on){
             
             if(tmr4cnt++ == TMR4_MAX){  // 60ms
                 tmr4cnt=0;
-                TMR4IF=1;
+                tmr4if=1;
             };
         }
         
@@ -742,17 +739,22 @@ static unsigned char latb=0;
 #define START_TCONV_1()		(ADCON0 = _CHS0 | _ADON)
 #define START_TCONV_2()		(ADCON0 = _CHS1 | _ADON)
 
-/******************************************************************************/
-unsigned int read_ad(unsigned int adfilter){
 
-    static unsigned long temp;
+unsigned int read_ad(unsigned int adfilter){
+    unsigned int tmp;
+    
 	ADCON0bits.GO = 1;
 	while(ADCON0bits.GO);
-//	ADCON0bits.ADON = 0;
-    temp =((adfilter - (adfilter >> 6)) + ((ADRESH << 8) | ADRESL));
-	return (unsigned int)temp;
+	ADCON0bits.ADON = 0;
 
+    tmp=((ADRESH *256) + ADRESL); // original code adding high byte did not work with C18 compiler
+                                  // took me a long time to find out what was wrong with this code
+
+    // low pass with last 63 values
+    return ((adfilter-(adfilter>>6)) + tmp);
 }
+
+
 
 /******************************************************************************/
 int ad_to_temp(unsigned int adfilter){
@@ -775,39 +777,6 @@ int ad_to_temp(unsigned int adfilter){
 	// Divide by 64 to get back to normal temperature
 	return (temp >> 6);
 }
-
-/******************************************************************************/
-    int ad_to_temp2(unsigned int adfilter){
-
-#define MINTABLE -250
-#define TABLESTEP 50 // 1/10 of degree
-    
-    int temp = MINTABLE; // in 1/10 of deg.
-    char tabPtr=0;
-    int gapPos, delta=0;
-    int level;
-    level=(int)(adfilter/SAMPLES)-512;
-    
-    while((ad_lookup[tabPtr] < (level) )&& (tabPtr<32))
-        {
-            temp +=TABLESTEP; // we increment by 5 deg at each step
-            tabPtr++;
-        }
-    
-    // calculate gap in adc value between 2 points(5 deg). 
-    delta=ad_lookup[tabPtr]-ad_lookup[tabPtr-1];
-    
-    // calculate probe position within the gap 
-    gapPos=adfilter/SAMPLES-ad_lookup[tabPtr-1];
-    
-    // add the gap to the lookup value
-    
-    temp+=(delta*TABLESTEP/gapPos);
-    
-	// Divide by 64 to get back to normal temperature
-	return (temp);
-}
-
 
 
 #if defined COM
@@ -948,7 +917,7 @@ static void fo433_fsm(){
 
 #endif
 
-unsigned int ad_filter;
+unsigned int ad_filter=0x7fff;
 unsigned int millisx60=0;
 /******************************************************************************
  * Main entry point.
@@ -968,11 +937,7 @@ void main(void)  {
     
  	START_TCONV_1();   
     
-    //    init_adc buffer
-    for(i=0;i<SAMPLES;i++){
-        ad_filter=read_ad(ad_filter);
-    }
-    
+
 
 
 #ifdef TEST_1DIGIT
@@ -1003,22 +968,24 @@ void main(void)  {
 		}
 #endif
           
-		if(TMR6IF) { 
+        
+		// Handle button press and menu
+		if(tmr6if) { 
 
-			// Handle button press and menu
 			button_menu_fsm();
 
-			if(!TMR4ON){
+			if(!tmr4on){
 				led_e.raw = LED_OFF;
 				led_10.raw = LED_O;
 				led_1.raw = led_01.raw = LED_F;
 			}
 
 			// Reset timer flag
-			TMR6IF = 0;
+			tmr6if = 0;
 		}
 
-		if(TMR4IF) {
+        // read sensors and convert to temperature
+		if(tmr4if) {
 
 			millisx60++;
 
@@ -1038,7 +1005,7 @@ void main(void)  {
 			if((millisx60 & 0xf) == 0) {
 
 				temperature = ad_to_temp(ad_filter) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
-//				temperature = ad_to_temp(ad_filter) +TCORRECTION+ eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
+
 #if defined PB2
 				temperature2 = ad_to_temp(ad_filter2) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc2));
 #endif
@@ -1128,10 +1095,11 @@ void main(void)  {
 			} // End 1 sec section
             
         	// Reset timer flag
-			TMR4IF = 0;
+			tmr4if = 0;
 		}
 		// Reset watchdog
 		ClrWdt();
 	} // end while(1)
 } // end main
+
 

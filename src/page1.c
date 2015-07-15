@@ -48,10 +48,9 @@ extern unsigned int heating_delay;
 extern unsigned int cooling_delay;
 
 #if defined (__18F2520)
-extern  char TMR1GE; // Menu on flag
-extern char menuON;
-//extern char RX9; // SA flash flag
-extern char alarmFlash;
+extern char dispTemp; // was TMR1GE; // Menu on flag
+extern char alarmFlash; //was RX9; // SA flash flag
+
 //char TX9; //  // 0=sens0 active, 1=sens1 active flag
 
 char menu01;
@@ -196,7 +195,7 @@ void button_menu_fsm(void){
         INTCON2bits.NOT_RBPU=0;
         
 
-        	_buttons = (_buttons << 1) | KB_PWR; // pwr // bit 3
+        _buttons = (_buttons << 1) | KB_PWR; // pwr // bit 3
 		_buttons = (_buttons << 1) | KB_SET; // set // bit 2
 		_buttons = (_buttons << 1) | KB_UP;  // up  // bit 1
 		_buttons = (_buttons << 1) | KB_DWN; // down// bit 0
@@ -485,7 +484,8 @@ chk_cfg_acc_label:
 	/* This is last resort...
 	 * Start using unused registers for general purpose
 	 * Use TMR1GE to flag if display should show temperature or not */
-//	TMR1GE = (state==0);
-	menuON = (state==0);
 
+	dispTemp = (state==0); // was TMR1GE
+ 
 }
+

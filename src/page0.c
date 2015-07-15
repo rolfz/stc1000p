@@ -31,23 +31,28 @@
  * Timer6   handles buttons pressed        
  * 
  */
-
+//#define USE_NTC
+//#define USE_TIMER1 // not fixed yet
+#define USE_DS1820
 
 #include <p18cxxx.h>
 #include "stc1000p.h"
 
+#ifndef USE_NTC
+    #include "ds1821.h"
+#endif
+
 /* Defines */
 
 /* Configuration words */
-///unsigned int __at _CONFIG1 __CONFIG1 = 0xFD4;
-///unsigned int __at _CONFIG2 __CONFIG2 = 0x3AFF;
 
 #pragma config OSC = INTIO67	// You can write this way
-#pragma config FCMEN = OFF		  // OR this way 
+#pragma config FCMEN = ON		  // OR this way 
 #pragma config MCLRE = ON
 #pragma config IESO = OFF 
 #pragma config PWRT = OFF // power up timer
-#pragma config BOREN = OFF                                     
+#pragma config BOREN = OFF        
+
 //#pragma config BORV = 3
 //#pragma config VREGEN = OFF
 #if defined (__DEBUG)
@@ -87,6 +92,7 @@ led_t led_10, led_1, led_01 ={0};
     
 int temperature=0; // store temperature in 0.1deg steps (temp*10)
     
+
 #define SAMPLES 64L
 
 #if defined PB2
@@ -108,7 +114,7 @@ static unsigned char fo433_sec_count = 24;
 #if defined(__18F2520)
 // we simulate timer 4 and 6 in software
 // timer 6 with 60ms interval
-unsigned char tmr6if=0;
+char tmr6if=0;
 unsigned char tmr6cnt=0;
 #define TMR6_MAX  112 // 112ms count to get 1 sec pulse
 // timer 4 with 120ms interval
@@ -117,11 +123,9 @@ unsigned char tmr4on=1;
 unsigned char tmr4cnt=0;
 #define TMR4_MAX 60 // 60ms count freq
 
-//char TMR1GE=0;   // Menu on flag, avoid display temp when menu is on.
-char menuON=0;
-char alarmFlash=0; 
-//RX9=0;      // SA flash flag
-//extern char TX9; // 0=sens0 active, 1=sens1 active
+char dispTemp=0;  // Menu on flag, avoid display temp when menu is on.
+char alarmFlash=0; // was RX9 // SA flash flag
+//extern char sens12; // was TX9; // 0=sens0 active, 1=sens1 active
 
 #endif
 
@@ -364,10 +368,11 @@ void update_profile(void){
 			curr_step++;
 			eeprom_write_config(EEADR_SET_MENU_ITEM(St), curr_step);
 		} else if(eeprom_read_config(EEADR_SET_MENU_ITEM(rP))) { // Is ramping enabled?
-			int profile_step_sp = eeprom_read_config(profile_step_eeaddr);
+		
+            int profile_step_sp = eeprom_read_config(profile_step_eeaddr);
 			unsigned int t = curr_dur << 6;
 			long sp = 32;
-			unsigned char i;
+			unsigned i;
 
 			// Linear interpolation calculation of new setpoint (64 substeps)
 			for (i = 0; i < 64; i++) {
@@ -465,17 +470,23 @@ void temperature_control(void){
  * returns: nothing
  */
 void init() {
-    int i;
     
     ADCON1 |= 0x0F;                 // Default all pins to digital
 	OSCCON = 0b01101010; // 4MHz
 
+    // disable comparator
+    CMCON=7;
 	// Heat, cool as output, Thermistor as input, piezo output
 #if defined FO433
 	TRISA = 0b00001100;
-#else
+#elif defined USE_NTC
 	SENS_TRIS=0b10100011; // alternative with RA5 and RA7 as KEB input (free RB6/7 for debug)
 //	SENS_TRIS=0b00000011;
+#elif defined USE_DS1820
+    SENS_TRIS=0b10100010;
+    LATAbits.LATA0=0; // we pull down the line to get a Ground on the DS1820 sensor
+    // PORTAbits.RB1 will be used as input
+    LATAbits.LATA4=1;
 #endif
 	SENS_PORT= 0; // Drive relays and piezo low
 
@@ -487,6 +498,7 @@ void init() {
     LED_PORT = 0x00;
 	LED_TRIS = 0; // led 0-7
 
+#ifdef USE_NTC
    	// Analog input on thermistor
     ADCON1=0b00001110; // vref = vcc, RA0 as sensor input
     //ADCON1=0b00001101; // RA0-RA1 as sensor input
@@ -501,10 +513,21 @@ void init() {
   
 	// Right justify AD result
 	ADCON2bits.ADFM = 1;
-
+#endif
 	// IMPORTANT FOR BUTTONS TO WORK!!! Disable analog input -> enables digital input
 	// ???????????? not required for PIC18F ANSELC = 0;
+    T0CON=0; // disable Timer0
+    // initalize timer 1 for RTC based on external crystal (32khz)
+    TMR1H=0x80;
+    TMR1L=0;
+    T1CONbits.RD16=1;
+    T1CONbits.T1OSCEN=1;
+    T1CONbits.T1SYNC=1;
+    T1CONbits.TMR1CS=1;
+    T1CONbits.TMR1ON=1;
 
+    PIE1bits.TMR1IE=1;
+    
 	// Postscaler 1:1, Enable counter, prescaler 1:4
     T2CON=0;
     T2CONbits.T2CKPS=1;
@@ -530,6 +553,8 @@ void init() {
 #elif defined(__18F2520)
     // TMR4ON is flag in software
 	tmr4on = eeprom_read_config(EEADR_POWER_ON);
+//    TMR1ON=tmr4on;
+    
     vPR6 = 112;
 #endif
     
@@ -657,6 +682,14 @@ static unsigned char latb=0;
 		TMR0IF = 0;
 	}
 #endif
+    // TIMER1 configured for external clock 32khz
+    if (PIR1bits.TMR1IF)
+        {
+        TMR1H=0x80; // reload the timer for 1sec interrupt
+        TMR1L=0;
+        tmr4if=1;
+        PIR1bits.TMR1IF=0;
+        }
 	// Check for Timer 2 interrupt (every 1ms)
 	// Kind of excessive when it's the only enabled interrupt
 	// but is nice as reference if more interrupts should be needed
@@ -711,14 +744,16 @@ static unsigned char latb=0;
 
 // software implementation of time 4 and 6 not available in 18f2520 hardware
 //            if(tmr6cnt++== TMR6_MAX){   // 112ms
-            if(tmr6cnt++ >= vPR6){   // 112ms
+// TMR6_MAX replaced with vPR6 to vary menu increase decrease frequency as done 
+// with PR6 in original code
+            if(tmr6cnt++ >= vPR6){   // 112ms keyboard update
                 tmr6cnt=0;
                 tmr6if=1;
             }
 
         if(tmr4on){
             
-            if(tmr4cnt++ == TMR4_MAX){  // 60ms
+            if(tmr4cnt++ == TMR4_MAX){  // 60ms timer counter
                 tmr4cnt=0;
                 tmr4if=1;
             };
@@ -732,13 +767,15 @@ static unsigned char latb=0;
     
 } // end ISR
 
+
+
+#ifdef USE_NTC
 #define _ADON 1
 #define _CHS0 2
 #define _CHS1 4
 
 #define START_TCONV_1()		(ADCON0 = _CHS0 | _ADON)
 #define START_TCONV_2()		(ADCON0 = _CHS1 | _ADON)
-
 
 unsigned int read_ad(unsigned int adfilter){
     unsigned int tmp;
@@ -777,6 +814,7 @@ int ad_to_temp(unsigned int adfilter){
 	// Divide by 64 to get back to normal temperature
 	return (temp >> 6);
 }
+#endif
 
 
 #if defined COM
@@ -917,7 +955,12 @@ static void fo433_fsm(){
 
 #endif
 
-unsigned int ad_filter=0x7fff;
+#ifdef USE_NTC 
+    unsigned int ad_filter=0x7fff;
+#else
+    unsigned int temp_raw;
+#endif
+//    unsigned char div2=0;
 unsigned int millisx60=0;
 /******************************************************************************
  * Main entry point.
@@ -926,17 +969,18 @@ unsigned int millisx60=0;
 void main(void)  {
     
 //  static unsigned int millisx60=0;
-//	static unsigned int ad_filter=0x7ffe; // equals to 512*64 samples = around 0
+//	static unsigned int ad_filter=0x7ffe; 
 //	static unsigned int ad_filter;
-    char i;
+    
 #if defined PB2
 	unsigned int ad_filter2=0x7ffe;
 #endif
 
 	init();
-    
+
+#ifdef USE_NTC
  	START_TCONV_1();   
-    
+#endif
 
 
 
@@ -984,28 +1028,64 @@ void main(void)  {
 			tmr6if = 0;
 		}
 
-        // read sensors and convert to temperature
-		if(tmr4if) {
+        // read sensors and convert 
+#ifndef USE_TIMER1
+		if(tmr4if) { // run every 60ms
 
-			millisx60++;
+			millisx60++; 
 
-			if(millisx60 & 0x1){
-				ad_filter = read_ad(ad_filter);
-
+			if(millisx60 & 0x1){ // every 120ms we read the temp value
+#if defined USE_NTC
+				ad_filter = read_ad(ad_filter); 
+                
+#elif defined (USE_DS1820)
+                temp_raw = ds1820_read_raw();
+#endif
 #if defined PB2
 				START_TCONV_2();
 			} else {
 				ad_filter2 = read_ad(ad_filter2);
 #endif
+#if defined USE_NTC
 				START_TCONV_1();
+#endif
 			}
-
 			// Only run every 16th time called, that is 16x60ms = 960ms
 			// Close enough to 1s for our purposes.
 			if((millisx60 & 0xf) == 0) {
+#else
+                
+                if(tmr4if)
+                {
+                millisx60+=16;
+                    // 1 second done directly without any filter.
+                
+                temp_raw = ds1820_read_raw();
 
+                if((div2++ ==4)==0)
+                {
+                div2=0;
+#endif  
+                
+#if defined USE_NTC
 				temperature = ad_to_temp(ad_filter) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc));
-
+#elif defined USE_DS1820
+              //  temp_raw=0x07d8; //+125.5
+              //  temp_raw=0x0198; // +25.5
+              //  temp_raw=0xfe68; // -25.5
+              //  temp_raw=0xfc98; // -55.5
+              //  temp_raw=0x0008; // +0.5
+               //   temp_raw=0xff38; // -0.5
+                // ad_filter contains raw data from DS1820 sensor
+                // the 4 lower bits are < 1deg, need to be converted
+                // we only use 0.5deg précision from the sensor.
+                // no need to calibrate a
+				temperature = (int)temp_raw/16;
+                temperature*=10;
+                if(temp_raw&0x08){
+                    temperature+=5;
+                    }
+#endif
 #if defined PB2
 				temperature2 = ad_to_temp(ad_filter2) + eeprom_read_config(EEADR_SET_MENU_ITEM(tc2));
 #endif
@@ -1022,7 +1102,14 @@ void main(void)  {
 #endif
 
 				// Alarm on sensor error (AD result out of range)
+#if defined USE_NTC
 				BUZ = ((ad_filter>>8) >= 248 || (ad_filter>>8) <= 8) 
+#else
+                if(!ds1820_exist())BUZ=1;
+                else BUZ=0;
+                   
+#endif
+
 #if defined PB2
 					 (eeprom_read_config(EEADR_SET_MENU_ITEM(Pb)) && ((ad_filter2>>8) >= 248 || (ad_filter2>>8) <= 8))
 #endif
@@ -1071,7 +1158,7 @@ void main(void)  {
 					temperature_control();
 
 					// Show temperature if menu is idle
-					if(menuON){ // was TMR1GE
+					if(dispTemp){ // was TMR1GE
 						if(BUZ && alarmFlash){ //RX9 ){ 
 							led_10.raw = LED_S;
 							led_1.raw = LED_A;
@@ -1088,8 +1175,7 @@ void main(void)  {
 							temperature_to_led(temperature);
 #endif
 						}
-//						RX9 = !RX9;
-                        alarmFlash!=alarmFlash;
+                        alarmFlash!=alarmFlash; // was RX9
 					}
 				}
 			} // End 1 sec section
@@ -1101,5 +1187,4 @@ void main(void)  {
 		ClrWdt();
 	} // end while(1)
 } // end main
-
 
